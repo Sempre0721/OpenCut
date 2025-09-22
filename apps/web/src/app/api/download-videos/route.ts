@@ -1,18 +1,29 @@
+// apps/web/src/app/api/download-videos/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { spawn } from "child_process";
-import path from "path";
 
-const searchRequestSchema = z.object({
-  keyword: z.string().min(1, "Keyword is required"),
-  page: z.number().optional().default(1),
-  pageSize: z.number().optional().default(20),
-});
-
+/**
+ * Validates the request body for video URL.
+ */
 const infoRequestSchema = z.object({
   url: z.string().url("Invalid URL provided"),
 });
 
+/**
+ * Validates the request body for search keyword.
+ */
+const searchRequestSchema = z.object({
+  keyword: z.string().min(1, "Keyword is required"),
+  page: z.number().int().positive().optional().default(1),
+  pageSize: z.number().int().min(1).max(50).optional().default(20),
+});
+
+/**
+ * Handles POST requests to /api/download-videos with action parameter.
+ * Supports: search, info, download
+ */
 export async function POST(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -27,7 +38,7 @@ export async function POST(request: NextRequest) {
         return await handleDownload(request);
       default:
         return NextResponse.json(
-          { error: "Invalid action. Use 'search', 'info' or 'download'." },
+          { error: "Invalid action. Use 'search', 'info', or 'download'." },
           { status: 400 }
         );
     }
@@ -43,6 +54,10 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/**
+ * Handles video search using yt-dlp.
+ * Searches videos based on keyword and pagination.
+ */
 async function handleSearch(request: NextRequest) {
   try {
     const rawBody = await request.json().catch(() => null);
@@ -65,19 +80,19 @@ async function handleSearch(request: NextRequest) {
     }
 
     const { keyword, page, pageSize } = validationResult.data;
-    
-    // Use yt-dlp to search for videos
+    const startIndex = (page - 1) * pageSize + 1;
+    const endIndex = page * pageSize;
+
     return new Promise((resolve) => {
-      const startIndex = (page - 1) * pageSize + 1;
-      const endIndex = page * pageSize;
-      
       const ytDlp = spawn("yt-dlp", [
         "--dump-single-json",
         "--flat-playlist",
         "--no-warnings",
-        "--playlist-start", startIndex.toString(),
-        "--playlist-end", endIndex.toString(),
-        `ytsearch${pageSize}:${keyword}`
+        "--playlist-start",
+        startIndex.toString(),
+        "--playlist-end",
+        endIndex.toString(),
+        `ytsearch${pageSize}:${keyword}`,
       ]);
 
       let stdoutData = "";
@@ -94,7 +109,7 @@ async function handleSearch(request: NextRequest) {
       ytDlp.on("close", (code) => {
         try {
           if (code !== 0) {
-            resolve(
+            return resolve(
               NextResponse.json(
                 {
                   success: false,
@@ -104,11 +119,10 @@ async function handleSearch(request: NextRequest) {
                 { status: 500 }
               )
             );
-            return;
           }
 
           if (!stdoutData.trim()) {
-            resolve(
+            return resolve(
               NextResponse.json(
                 {
                   success: false,
@@ -118,21 +132,21 @@ async function handleSearch(request: NextRequest) {
                 { status: 500 }
               )
             );
-            return;
           }
 
           const result = JSON.parse(stdoutData);
-          
-          resolve(NextResponse.json({ 
-            success: true, 
-            data: result 
-          }));
+          resolve(
+            NextResponse.json({
+              success: true,
+              data: Array.isArray(result) ? result : [result],
+            })
+          );
         } catch (parseError) {
           resolve(
             NextResponse.json(
               {
                 success: false,
-                error: `Error parsing yt-dlp output`,
+                error: "Error parsing yt-dlp output",
                 details: parseError instanceof Error ? parseError.message : "Unknown error",
                 rawOutput: stdoutData,
               },
@@ -147,7 +161,7 @@ async function handleSearch(request: NextRequest) {
           NextResponse.json(
             {
               success: false,
-              error: `Failed to start yt-dlp process`,
+              error: "Failed to start yt-dlp process",
               details: error.message,
             },
             { status: 500 }
@@ -166,6 +180,10 @@ async function handleSearch(request: NextRequest) {
   }
 }
 
+/**
+ * Fetches video metadata using yt-dlp.
+ * Returns title, duration, formats, thumbnails, etc.
+ */
 async function handleVideoInfo(request: NextRequest) {
   try {
     const rawBody = await request.json().catch(() => null);
@@ -189,13 +207,13 @@ async function handleVideoInfo(request: NextRequest) {
 
     const { url } = validationResult.data;
 
-    // Use yt-dlp to get video info
     return new Promise((resolve) => {
       const ytDlp = spawn("yt-dlp", [
         "--dump-single-json",
         "--no-warnings",
-        "--compat-options", "no-youtube-channel-redirect",
-        url
+        "--compat-options",
+        "no-youtube-channel-redirect",
+        url,
       ]);
 
       let stdoutData = "";
@@ -212,7 +230,7 @@ async function handleVideoInfo(request: NextRequest) {
       ytDlp.on("close", (code) => {
         try {
           if (code !== 0) {
-            resolve(
+            return resolve(
               NextResponse.json(
                 {
                   success: false,
@@ -222,11 +240,10 @@ async function handleVideoInfo(request: NextRequest) {
                 { status: 500 }
               )
             );
-            return;
           }
 
           if (!stdoutData.trim()) {
-            resolve(
+            return resolve(
               NextResponse.json(
                 {
                   success: false,
@@ -236,21 +253,21 @@ async function handleVideoInfo(request: NextRequest) {
                 { status: 500 }
               )
             );
-            return;
           }
 
           const result = JSON.parse(stdoutData);
-          
-          resolve(NextResponse.json({ 
-            success: true, 
-            data: result 
-          }));
+          resolve(
+            NextResponse.json({
+              success: true,
+              data: result,
+            })
+          );
         } catch (parseError) {
           resolve(
             NextResponse.json(
               {
                 success: false,
-                error: `Error parsing yt-dlp output`,
+                error: "Error parsing yt-dlp output",
                 details: parseError instanceof Error ? parseError.message : "Unknown error",
                 rawOutput: stdoutData,
               },
@@ -265,13 +282,66 @@ async function handleVideoInfo(request: NextRequest) {
           NextResponse.json(
             {
               success: false,
-              error: `Failed to start yt-dlp process`,
+              error: "Failed to start yt-dlp process",
               details: error.message,
             },
             { status: 500 }
           )
         );
       });
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error occurred",
+      },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * Initiates video download process (placeholder).
+ * In the future, this will spawn yt-dlp to download the video.
+ *
+ * @param request - Incoming NextRequest
+ * @returns NextResponse with download status
+ */
+async function handleDownload(request: NextRequest) {
+  try {
+    const rawBody = await request.json().catch(() => null);
+    if (!rawBody) {
+      return NextResponse.json(
+        { error: "Invalid JSON in request body" },
+        { status: 400 }
+      );
+    }
+
+    const validationResult = infoRequestSchema.safeParse(rawBody);
+    if (!validationResult.success) {
+      return NextResponse.json(
+        {
+          error: "Invalid request parameters",
+          details: validationResult.error.flatten().fieldErrors,
+        },
+        { status: 400 }
+      );
+    }
+
+    const { url } = validationResult.data;
+
+    // TODO: 实际调用 yt-dlp 下载视频文件
+    // 当前返回模拟响应
+    return NextResponse.json({
+      success: true,
+      message: "Download started (placeholder)",
+      data: {
+        url,
+        status: "queued",
+        downloadId: crypto.randomUUID(),
+        startedAt: new Date().toISOString(),
+      },
     });
   } catch (error) {
     return NextResponse.json(
